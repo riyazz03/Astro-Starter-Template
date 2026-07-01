@@ -1,0 +1,46 @@
+{
+  "space-2": {
+    "minPx": 1,
+    "maxPx": 2
+  },
+  "space-4": {
+    "minPx": 2,
+    "maxPx": 4
+  },
+  "space-8": {
+    "minPx": 4,
+    "maxPx": 8
+  },
+  "space-12": {
+    "minPx": 6,
+    "maxPx": 12
+  },
+  "space-16": {
+    "minPx": 8,
+    "maxPx": 16
+  },
+  "space-24": {
+    "minPx": 12,
+    "maxPx": 24
+  },
+  "space-32": {
+    "minPx": 16,
+    "maxPx": 32
+  },
+  "space-48": {
+    "minPx": 24,
+    "maxPx": 48
+  },
+  "space-64": {
+    "minPx": 32,
+    "maxPx": 64
+  },
+  "space-26": {
+    "minPx": 13,
+    "maxPx": 26
+  },
+  "space-160": {
+    "minPx": 80,
+    "maxPx": 160
+  }
+}

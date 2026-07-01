@@ -1,0 +1,255 @@
+---
+if (!import.meta.env.DEV) {
+	return Astro.redirect("/");
+}
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Style guide</title>
+		<meta name="viewport" content="width=device-width" />
+	</head>
+	<body style="margin:0;background:#ffffff;color:#1a1a1a;font-family:system-ui,sans-serif;padding-bottom:100px;">
+		<h1 style="text-align:center;padding:48px 0 32px;margin:0;font-size:26px;font-weight:600;">Style guide</h1>
+
+		<main style="max-width:960px;margin:0 auto;padding:0 40px;display:grid;gap:56px;">
+			<section>
+				<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+					<h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:#4b5563;margin:0;">Colors</h2>
+					<button id="add-palette" style="font-size:12px;padding:6px 12px;border:1px solid #9ca3af;border-radius:6px;background:#fff;color:#1a1a1a;cursor:pointer;">+ Add palette</button>
+				</div>
+				<div id="palettes-container"></div>
+			</section>
+
+			<section>
+				<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+					<h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:#4b5563;margin:0;">Typography</h2>
+					<button id="add-typography" style="font-size:12px;padding:6px 12px;border:1px solid #9ca3af;border-radius:6px;background:#fff;color:#1a1a1a;cursor:pointer;">+ Add style</button>
+				</div>
+				<div id="typography-list"></div>
+			</section>
+
+			<section>
+				<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+					<h2 style="font-size:14px;text-transform:uppercase;letter-spacing:0.05em;color:#4b5563;margin:0;">Spacer scale</h2>
+					<div style="display:flex;gap:8px;align-items:center;">
+						<select id="spacer-scale-select" style="font-size:12px;padding:6px;border:1px solid #9ca3af;border-radius:6px;"></select>
+						<button id="add-spacer" style="font-size:12px;padding:6px 12px;border:1px solid #9ca3af;border-radius:6px;background:#fff;color:#1a1a1a;cursor:pointer;">+ Add</button>
+					</div>
+				</div>
+				<div id="fluid-list"></div>
+			</section>
+		</main>
+
+		<button id="save-all" style="position:fixed;bottom:24px;right:24px;padding:12px 22px;background:#1a1a1a;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.15);">
+			Save changes
+		</button>
+		<span id="status" style="position:fixed;bottom:32px;right:180px;font-size:12px;color:#16a34a;"></span>
+
+		<script>
+			const API = "http://localhost:4322";
+			const BORDER = "#9ca3af";
+			let tokens: any = {};
+
+			const status = document.getElementById("status")!;
+			function showStatus(msg: string) {
+				status.textContent = msg;
+				setTimeout(() => (status.textContent = ""), 2200);
+			}
+
+			async function loadTokens() {
+				const res = await fetch(`${API}/tokens`);
+				tokens = await res.json();
+				renderPalettes();
+				renderTypography();
+				renderFluid();
+			}
+
+			function renderPalettes() {
+				const container = document.getElementById("palettes-container")!;
+				container.innerHTML = "";
+				for (const [paletteName, colorMap] of Object.entries(tokens.colors.palettes) as [string, any][]) {
+					const card = document.createElement("div");
+					card.style.cssText = `border:1px solid ${BORDER};border-radius:8px;padding:16px;margin-bottom:16px;`;
+					card.innerHTML = `
+						<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+							<strong style="font-size:13px;">${paletteName}</strong>
+							<button data-add-color="${paletteName}" style="font-size:11px;padding:4px 10px;border:1px solid ${BORDER};border-radius:6px;background:#fff;cursor:pointer;">+ Color</button>
+						</div>
+						<div id="palette-${paletteName}" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px;"></div>
+					`;
+					container.appendChild(card);
+
+					const grid = card.querySelector(`#palette-${paletteName}`)!;
+					for (const [colorName, hex] of Object.entries(colorMap) as [string, string][]) {
+						const swatch = document.createElement("div");
+						swatch.style.cssText = `border:1px solid ${BORDER};border-radius:6px;overflow:hidden;`;
+						swatch.innerHTML = `
+							<div style="height:44px;background:${hex};"></div>
+							<div style="padding:6px;font-size:11px;">
+								<div style="margin-bottom:4px;color:#1a1a1a;">${colorName}</div>
+								<div style="display:flex;gap:4px;align-items:center;">
+									<input type="color" value="${hex}" data-palette="${paletteName}" data-color="${colorName}" class="picker" style="width:20px;height:20px;padding:0;border:none;cursor:pointer;" />
+									<input type="text" value="${hex}" data-palette="${paletteName}" data-color="${colorName}" class="hexinput" style="flex:1;font-size:11px;padding:3px;border:1px solid ${BORDER};border-radius:4px;min-width:0;" />
+								</div>
+							</div>
+						`;
+						grid.appendChild(swatch);
+					}
+
+					card.querySelector(`[data-add-color="${paletteName}"]`)!.addEventListener("click", () => {
+						const name = prompt("Color name (e.g. primary-700):");
+						if (!name) return;
+						tokens.colors.palettes[paletteName][name] = "#cccccc";
+						renderPalettes();
+					});
+				}
+
+				container.querySelectorAll(".picker").forEach((el) => {
+					el.addEventListener("input", (e) => {
+						const input = e.target as HTMLInputElement;
+						const hexTwin = container.querySelector(
+							`.hexinput[data-palette="${input.dataset.palette}"][data-color="${input.dataset.color}"]`
+						) as HTMLInputElement;
+						hexTwin.value = input.value;
+					});
+				});
+				container.querySelectorAll(".hexinput").forEach((el) => {
+					el.addEventListener("input", (e) => {
+						const input = e.target as HTMLInputElement;
+						const pickerTwin = container.querySelector(
+							`.picker[data-palette="${input.dataset.palette}"][data-color="${input.dataset.color}"]`
+						) as HTMLInputElement;
+						if (/^#[0-9a-fA-F]{6}$/.test(input.value)) pickerTwin.value = input.value;
+					});
+				});
+			}
+
+			const WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+			const LINE_HEIGHTS = [1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 2];
+
+			function renderTypography() {
+				const container = document.getElementById("typography-list")!;
+				container.innerHTML = "";
+				for (const [name, props] of Object.entries(tokens.typography) as [string, any][]) {
+					const row = document.createElement("div");
+					row.style.cssText = `border:1px solid ${BORDER};border-radius:8px;padding:16px;margin-bottom:14px;`;
+					row.innerHTML = `
+						<p style="font-family:${props.fontFamily};font-weight:${props.weight};line-height:${props.lineHeight};font-size:${props.maxPx}px;margin:0 0 12px;color:#1a1a1a;">
+							${name} — The quick brown fox
+						</p>
+						<div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:#4b5563;">
+							<label>Min px<br/><input type="number" value="${props.minPx}" data-typo="${name}" data-field="minPx" style="width:60px;padding:4px;border:1px solid ${BORDER};border-radius:4px;" /></label>
+							<label>Max px<br/><input type="number" value="${props.maxPx}" data-typo="${name}" data-field="maxPx" style="width:60px;padding:4px;border:1px solid ${BORDER};border-radius:4px;" /></label>
+							<label>Weight<br/>
+								<select data-typo="${name}" data-field="weight" style="padding:4px;border:1px solid ${BORDER};border-radius:4px;">
+									${WEIGHTS.map((w) => `<option value="${w}" ${w === props.weight ? "selected" : ""}>${w}</option>`).join("")}
+								</select>
+							</label>
+							<label>Line height<br/>
+								<select data-typo="${name}" data-field="lineHeight" style="padding:4px;border:1px solid ${BORDER};border-radius:4px;">
+									${LINE_HEIGHTS.map((l) => `<option value="${l}" ${l === props.lineHeight ? "selected" : ""}>${l}</option>`).join("")}
+								</select>
+							</label>
+							<label>Font family<br/><input type="text" value="${props.fontFamily}" data-typo="${name}" data-field="fontFamily" style="width:110px;padding:4px;border:1px solid ${BORDER};border-radius:4px;" /></label>
+						</div>
+					`;
+					container.appendChild(row);
+				}
+			}
+
+			function fullSpacerScale() {
+				const scale: number[] = [];
+				for (let v = 2; v <= 100; v += 2) scale.push(v);
+				for (let v = 110; v <= 180; v += 10) scale.push(v);
+				return scale;
+			}
+
+			function renderFluid() {
+				const container = document.getElementById("fluid-list")!;
+				container.innerHTML = "";
+				for (const [name, props] of Object.entries(tokens.fluid) as [string, any][]) {
+					const row = document.createElement("div");
+					row.style.cssText = `border:1px solid ${BORDER};border-radius:8px;padding:12px 16px;margin-bottom:10px;display:flex;align-items:center;gap:16px;font-size:12px;`;
+					row.innerHTML = `
+						<span style="min-width:90px;color:#1a1a1a;">${name}</span>
+						<div style="flex:1;height:6px;background:#e5e7eb;border-radius:3px;">
+							<div style="height:100%;width:${Math.min(100, (props.maxPx / 180) * 100)}%;background:#1a1a1a;border-radius:3px;"></div>
+						</div>
+						<input type="number" value="${props.minPx}" data-fluid="${name}" data-field="minPx" style="width:56px;padding:4px;border:1px solid ${BORDER};border-radius:4px;" />
+						<span style="color:#4b5563;">to</span>
+						<input type="number" value="${props.maxPx}" data-fluid="${name}" data-field="maxPx" style="width:56px;padding:4px;border:1px solid ${BORDER};border-radius:4px;" />
+						<span style="color:#4b5563;">px</span>
+					`;
+					container.appendChild(row);
+				}
+
+				const select = document.getElementById("spacer-scale-select") as HTMLSelectElement;
+				select.innerHTML = "";
+				const existing = new Set(Object.keys(tokens.fluid));
+				fullSpacerScale()
+					.filter((v) => !existing.has(`space-${v}`))
+					.forEach((v) => {
+						const opt = document.createElement("option");
+						opt.value = String(v);
+						opt.textContent = `${v}px`;
+						select.appendChild(opt);
+					});
+			}
+
+			document.getElementById("add-palette")!.addEventListener("click", () => {
+				const name = prompt("Palette name (e.g. accent):");
+				if (!name) return;
+				tokens.colors.palettes[name] = { [`${name}-500`]: "#cccccc" };
+				renderPalettes();
+			});
+
+			document.getElementById("add-typography")!.addEventListener("click", () => {
+				const name = prompt("Style name (e.g. heading-sm):");
+				if (!name) return;
+				tokens.typography[name] = { minPx: 16, maxPx: 20, weight: 400, lineHeight: 1.4, fontFamily: "Inter" };
+				renderTypography();
+			});
+
+			document.getElementById("add-spacer")!.addEventListener("click", () => {
+				const select = document.getElementById("spacer-scale-select") as HTMLSelectElement;
+				const v = Number(select.value);
+				if (!v) return;
+				tokens.fluid[`space-${v}`] = { minPx: Math.round(v / 2), maxPx: v };
+				renderFluid();
+			});
+
+			function collectFromDom() {
+				document.querySelectorAll<HTMLInputElement>("#palettes-container .hexinput").forEach((input) => {
+					tokens.colors.palettes[input.dataset.palette!][input.dataset.color!] = input.value;
+				});
+				document.querySelectorAll<HTMLInputElement | HTMLSelectElement>("#typography-list [data-typo]").forEach((input) => {
+					const name = input.dataset.typo!;
+					const field = input.dataset.field!;
+					const raw = (input as HTMLInputElement).value;
+					tokens.typography[name][field] = field === "fontFamily" ? raw : Number(raw);
+				});
+				document.querySelectorAll<HTMLInputElement>("#fluid-list [data-fluid]").forEach((input) => {
+					const name = input.dataset.fluid!;
+					const field = input.dataset.field!;
+					tokens.fluid[name][field] = Number(input.value);
+				});
+			}
+
+			document.getElementById("save-all")!.addEventListener("click", async () => {
+				collectFromDom();
+				for (const file of ["colors", "typography", "fluid"]) {
+					await fetch(`${API}/save`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ file, data: tokens[file] }),
+					});
+				}
+				showStatus("Saved — rebuilding");
+			});
+
+			loadTokens();
+		</script>
+	</body>
+</html>

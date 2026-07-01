@@ -1,0 +1,63 @@
+:root {
+  --primary-100: #dbeafe;
+  --primary-500: #2563eb;
+  --primary-900: #1e3a8a;
+  --riyaz: #cccccc;
+  --yhhe: #cccccc;
+  --jsdnsj: #cccccc;
+  --hsdbfhj: #cccccc;
+  --hjsdbfhjs: #cccccc;
+  --hsdbhfs: #cccccc;
+  --sdfhs: #cccccc;
+  --gy: #a33333;
+  --shbds: #cccccc;
+  --secondary-100: #f1f5f9;
+  --secondary-500: #64748b;
+  --secondary-900: #0f172a;
+  --sdhbfsh-500: #cccccc;
+  --hbcs-500: #cccccc;
+  --space-2: clamp(0.0625rem, 0.0417rem + 0.0833vw, 0.1250rem);
+  --space-4: clamp(0.1250rem, 0.0833rem + 0.1667vw, 0.2500rem);
+  --space-8: clamp(0.2500rem, 0.1667rem + 0.3333vw, 0.5000rem);
+  --space-12: clamp(0.3750rem, 0.2500rem + 0.5000vw, 0.7500rem);
+  --space-16: clamp(0.5000rem, 0.3333rem + 0.6667vw, 1.0000rem);
+  --space-24: clamp(0.7500rem, 0.5000rem + 1.0000vw, 1.5000rem);
+  --space-32: clamp(1.0000rem, 0.6667rem + 1.3333vw, 2.0000rem);
+  --space-48: clamp(1.5000rem, 1.0000rem + 2.0000vw, 3.0000rem);
+  --space-64: clamp(2.0000rem, 1.3333rem + 2.6667vw, 4.0000rem);
+  --space-26: clamp(0.8125rem, 0.5417rem + 1.0833vw, 1.6250rem);
+  --space-160: clamp(5.0000rem, 3.3333rem + 6.6667vw, 10.0000rem);
+  --font-size-heading-xl: clamp(2.0000rem, 1.3333rem + 2.6667vw, 4.0000rem);
+  --font-size-heading-lg: clamp(1.5000rem, 1.1667rem + 1.3333vw, 2.5000rem);
+  --font-size-body-base: clamp(1.0000rem, 0.9583rem + 0.1667vw, 1.1250rem);
+  --font-size-heading-sm: clamp(1.0000rem, 0.9167rem + 0.3333vw, 1.2500rem);
+}
+
+.text-heading-xl {
+  font-family: Inter;
+  font-weight: 700;
+  line-height: 1.1;
+  font-size: var(--font-size-heading-xl);
+}
+
+.text-heading-lg {
+  font-family: Inter;
+  font-weight: 600;
+  line-height: 1.2;
+  font-size: var(--font-size-heading-lg);
+}
+
+.text-body-base {
+  font-family: Inter;
+  font-weight: 400;
+  line-height: 1.6;
+  font-size: var(--font-size-body-base);
+}
+
+.text-heading-sm {
+  font-family: Inter;
+  font-weight: 400;
+  line-height: 1.4;
+  font-size: var(--font-size-heading-sm);
+}
+

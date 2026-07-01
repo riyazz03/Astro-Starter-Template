@@ -1,0 +1,29 @@
+{
+  "palettes": {
+    "primary": {
+      "primary-100": "#dbeafe",
+      "primary-500": "#2563eb",
+      "primary-900": "#1e3a8a",
+      "riyaz": "#cccccc",
+      "yhhe": "#cccccc",
+      "jsdnsj": "#cccccc",
+      "hsdbfhj": "#cccccc",
+      "hjsdbfhjs": "#cccccc",
+      "hsdbhfs": "#cccccc",
+      "sdfhs": "#cccccc",
+      "gy": "#a33333",
+      "shbds": "#cccccc"
+    },
+    "secondary": {
+      "secondary-100": "#f1f5f9",
+      "secondary-500": "#64748b",
+      "secondary-900": "#0f172a"
+    },
+    "sdhbfsh": {
+      "sdhbfsh-500": "#cccccc"
+    },
+    "hbcs": {
+      "hbcs-500": "#cccccc"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "heading-xl": {
+    "minPx": 32,
+    "maxPx": 64,
+    "weight": 700,
+    "lineHeight": 1.1,
+    "fontFamily": "Inter"
+  },
+  "heading-lg": {
+    "minPx": 24,
+    "maxPx": 40,
+    "weight": 600,
+    "lineHeight": 1.2,
+    "fontFamily": "Inter"
+  },
+  "body-base": {
+    "minPx": 16,
+    "maxPx": 18,
+    "weight": 400,
+    "lineHeight": 1.6,
+    "fontFamily": "Inter"
+  },
+  "heading-sm": {
+    "minPx": 16,
+    "maxPx": 20,
+    "weight": 400,
+    "lineHeight": 1.4,
+    "fontFamily": "Inter"
+  }
+}

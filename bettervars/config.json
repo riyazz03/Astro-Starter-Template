@@ -1,0 +1,8 @@
+{
+  "viewport": {
+    "min": 400,
+    "max": 1600
+  },
+  "defaultTheme": "light",
+  "output": "src/styles/bettervars.css"
+}
