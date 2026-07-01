@@ -1,0 +1,147 @@
+# Rebuilds + republishes this static site when BetterCMS content is published
+# (repository_dispatch: bcms-rebuild) and on push to main.
+name: BetterCMS Rebuild
+
+on:
+  repository_dispatch:
+    types: [bcms-rebuild]
+  push:
+    branches: [main]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (push → its commit; content rebuild → main HEAD)
+        uses: actions/checkout@v4
+        with:
+          # A push builds its own commit. A content rebuild (repository_dispatch)
+          # builds the latest main: the dispatched value is a content marker,
+          # not a git ref, so pinning checkout to it 404s the fetch.
+          ref: ${{ github.event_name == 'push' && github.sha || 'main' }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Current LTS. Modern frameworks (Astro 6, Vite 8) require Node >=22.12,
+          # and 22 stays backward-compatible with older projects.
+          node-version: "22"
+          # No 'cache:' here — it would hard-require a package-lock.json/yarn.lock and
+          # fail any bun/pnpm project. Each package manager handles its own caching.
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Fetch CMS content (build-time injection)
+        env:
+          API_URL: https://api.bettercms.ai
+          API_KEY: ${{ secrets.BCMS_API_KEY }}
+          WORKSPACE: ${{ vars.BCMS_WORKSPACE_SLUG }}
+          ENVIRONMENT: production
+          CONTENT_OUT: bcms-content.json
+        run: |
+          curl -fsSL "$API_URL/action/fetch-content.mjs" -o "$RUNNER_TEMP/fetch-content.mjs"
+          node "$RUNNER_TEMP/fetch-content.mjs"
+
+      - name: Install & build
+        run: |
+          # A repo with no package.json — or no "build" script — is a plain static
+          # site: skip install/build and publish the files as-is (Vercel "Other"
+          # preset). Otherwise detect the package manager from the committed lockfile
+          # so bun, pnpm, yarn and npm projects all build (no assumption of a lockfile).
+          corepack enable || true
+          if [ ! -f package.json ]; then
+            echo "No package.json — treating the repo as a static site (no build step)."
+          elif ! node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
+            echo "No \"build\" script in package.json — treating the repo as a static site (no build step)."
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+            echo "Detected Bun (bun.lock)"
+            bun install
+            bun run build
+          elif [ -f pnpm-lock.yaml ]; then
+            echo "Detected pnpm (pnpm-lock.yaml)"
+            pnpm install
+            pnpm run build
+          elif [ -f yarn.lock ]; then
+            echo "Detected Yarn (yarn.lock)"
+            yarn install
+            yarn build
+          elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            echo "Detected npm (lockfile)"
+            npm ci || npm install
+            npm run build
+          else
+            echo "No lockfile detected — falling back to npm install"
+            npm install
+            npm run build
+          fi
+
+      - name: Package, checksum & upload artifact
+        env:
+          API_URL: https://api.bettercms.ai
+          API_KEY: ${{ secrets.BCMS_API_KEY }}
+          PROJECT_ID: ${{ vars.BCMS_PROJECT_ID }}
+          # Optional escape hatch (Vercel "Output Directory" setting). Set the
+          # BCMS_BUILD_DIR repo variable to force a dir; unset → auto-detect below.
+          BUILD_DIR_OVERRIDE: ${{ vars.BCMS_BUILD_DIR }}
+        run: |
+          set -euo pipefail
+          # Label the artifact with the commit we actually built, so the platform
+          # always records a real git SHA — a content rebuild's dispatched marker
+          # isn't a commit. This self-heals what the next rebuild can reference.
+          SHA="$(git rev-parse HEAD)"
+          # Resolve the static build output to package. An explicit override wins;
+          # otherwise scan the conventional output dirs of the common static
+          # generators (Vite/Astro/Vue → dist, CRA/SvelteKit-static/Docusaurus →
+          # build, Next export → out, Gatsby/Hugo/VuePress → public, Eleventy/Jekyll
+          # → _site, Nuxt 3 → .output/public), preferring one with an index.html.
+          CANDIDATES="dist build out public _site .output/public"
+          BUILD_DIR=""
+          if [ -n "${BUILD_DIR_OVERRIDE:-}" ]; then
+            BUILD_DIR="$BUILD_DIR_OVERRIDE"
+            if [ ! -d "$BUILD_DIR" ]; then
+              echo "::error::configured BCMS_BUILD_DIR '$BUILD_DIR' not found after build"; exit 1
+            fi
+          else
+            for d in $CANDIDATES; do
+              if [ -d "$d" ] && [ -f "$d/index.html" ]; then BUILD_DIR="$d"; break; fi
+            done
+            # No root index.html? Fall back to the first candidate that contains ANY
+            # .html file (multi-page exports without a root index.html). A dir with
+            # assets but no HTML — e.g. a Next.js public/ when the app was NOT statically
+            # exported — is not a site, so it's skipped and we fail loud below rather
+            # than publishing a 403 directory with no index.
+            if [ -z "$BUILD_DIR" ]; then
+              for d in $CANDIDATES; do
+                if [ -d "$d" ] && [ -n "$(find "$d" -maxdepth 2 -name '*.html' -print -quit 2>/dev/null)" ]; then BUILD_DIR="$d"; break; fi
+              done
+            fi
+          fi
+          # Static site whose output IS the repo root (plain HTML, no build step).
+          if [ -z "$BUILD_DIR" ] && [ -n "$(find . -maxdepth 1 -name '*.html' -print -quit 2>/dev/null)" ]; then
+            echo "no build output dir — packaging the repo root as a static site"
+            BUILD_DIR="."
+          fi
+          if [ -z "$BUILD_DIR" ]; then
+            echo "::error::no static HTML found in the repo or any build output (searched: $CANDIDATES, plus the repo root). For a plain static site, commit an index.html. For a framework, produce a static export (Next.js: output:'export' + images.unoptimized:true in next.config; on Next.js 16+ build with 'next build --webpack' since the default Turbopack build skips static export) or set the BCMS_BUILD_DIR repository variable. A server framework with no static export can't be hosted here."; exit 1
+          fi
+          echo "packaging build dir: $BUILD_DIR"
+          TARBALL="$RUNNER_TEMP/bcms-artifact.tgz"
+          # Exclude repo metadata + our injected content file. Harmless no-ops when
+          # packaging a clean build dir (e.g. dist/), needed when packaging the repo root.
+          tar --exclude=./.git --exclude=./.github --exclude=./node_modules --exclude=./bcms-content.json -czf "$TARBALL" -C "$BUILD_DIR" .
+          CHECKSUM="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+          SIZE="$(stat -c%s "$TARBALL")"
+          echo "artifact: $SIZE bytes, sha256:$CHECKSUM"
+          STATUS="$(curl -sS -o "$RUNNER_TEMP/ingest-resp.json" -w '%{http_code}' \
+            -X POST "$API_URL/api/v1/projects/$PROJECT_ID/artifacts" \
+            -H "Authorization: Bearer $API_KEY" \
+            -H "X-Artifact-Sha: $SHA" \
+            -H "X-Artifact-Checksum: sha256:$CHECKSUM" \
+            -H "Content-Type: application/gzip" \
+            -H "Content-Length: $SIZE" \
+            --data-binary @"$TARBALL")"
+          echo "ingest HTTP $STATUS:"; cat "$RUNNER_TEMP/ingest-resp.json"; echo
+          if [ "$STATUS" != "202" ]; then
+            echo "::error::artifact ingest failed (HTTP $STATUS)"; exit 1
+          fi
