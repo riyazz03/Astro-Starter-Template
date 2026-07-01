@@ -1,0 +1,11 @@
+{"message":"draft mode enabled — /api/bcms/draft/{enable,disable} injected","label":"@bettercms-ai/astro","level":"info"}
+{"message":"This project contains server-rendered routes, but no adapter is installed. This is fine for development, but an adapter will be required to build your site for production.","label":"config","level":"warn"}
+{"message":"connected.","label":"vite","level":"info"}
+{"message":"Generated 0ms","label":"types","level":"info"}
+{"message":"connected.","label":"vite","level":"info"}
+{"message":"Re-optimizing dependencies because lockfile has changed","label":"vite","level":"info"}
+{"message":" astro  v7.0.4 ready in 566 ms\n┃ Local    http://localhost:4321/\n┃ Network  use --host to expose","label":"SKIP_FORMAT","level":"info"}
+{"message":"watching for file changes...","label":null,"level":"info"}
+{"message":"[200] / 932ms","label":null,"level":"info"}
+{"message":"[200] / 538ms","label":null,"level":"info"}
+{"message":"[200] / 1074ms","label":null,"level":"info"}

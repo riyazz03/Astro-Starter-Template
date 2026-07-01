@@ -1,5 +1,19 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import { loadEntry } from "bettercms:client";
+import { bcmsField } from "../bettercms.bindings.generated";
+
+interface HomeFields {
+	hero: {
+		nonRepeatable: {
+			heading: string;
+			body: string;
+		};
+	};
+}
+
+const entry = await loadEntry<HomeFields>(Astro, "home");
+const hero = entry?.data?.hero?.nonRepeatable;
 ---
 
 <Layout title="BetterVars">
@@ -9,11 +23,11 @@ import Layout from "../layouts/Layout.astro";
 		<div
 			style="background: var(--color-bg-card); color: var(--color-text); padding: var(--space-md); border-radius: 12px; max-width: 32rem;"
 		>
-			<h1 class="text-heading-xl" style="font-size: var(--font-heading-xl); color: var(--color-primary); margin: 0 0 var(--space-sm);">
-				BetterVars is live
+			<h1 {...bcmsField("hero.heading", "text")} class="text-heading-xl" style="font-size: var(--font-heading-xl); color: var(--color-primary); margin: 0 0 var(--space-sm);">
+				{hero?.heading ?? "BetterVars is live"}
 			</h1>
-			<p class="text-body-base" style="color: var(--color-text-muted); margin: 0;">
-				This heading and box are styled entirely from bettervars/*.json, resolved through the codegen script into src/styles/bettervars.css.
+			<p {...bcmsField("hero.body", "text")} class="text-body-base" style="color: var(--color-text-muted); margin: 0;">
+				{hero?.body ?? "This heading and box are styled entirely from bettervars/*.json, resolved through the codegen script into src/styles/bettervars.css."}
 			</p>
 		</div>
 	</main>

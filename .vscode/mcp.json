@@ -1,0 +1,15 @@
+{
+	"servers": {
+		"bettercms": {
+			"type": "stdio",
+			"command": "node",
+			"args": [
+				"${workspaceFolder}/node_modules/@bettercms-ai/mcp/dist/index.js"
+			],
+			"env": {
+				"BETTERCMS_API_URL": "https://api.bettercms.ai"
+			}
+		}
+	},
+	"inputs": []
+}

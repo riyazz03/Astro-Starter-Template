@@ -15,9 +15,13 @@
     "bettervars:watch": "node scripts/watch-bettervars.mjs"
   },
   "dependencies": {
+    "@bettercms-ai/astro": "^0.2.1",
+    "@bettercms-ai/codegen": "^0.5.0",
+    "@bettercms-ai/next": "^0.5.2",
     "astro": "^7.0.4"
   },
   "devDependencies": {
+    "@bettercms-ai/mcp": "^0.9.0",
     "chokidar": "^5.0.0",
     "concurrently": "^10.0.3",
     "open": "^11.0.0"
