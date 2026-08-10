@@ -290,18 +290,51 @@ jobs:
           SIZE="$(stat -c%s "$TARBALL")"
           DURATION="$(( $(date +%s) - ${BCMS_STARTED_AT:-$(date +%s)} ))"
           echo "artifact: $SIZE bytes, sha256:$CHECKSUM, built in ${DURATION}s"
-          STATUS="$(curl -sS -o "$RUNNER_TEMP/ingest-resp.json" -w '%{http_code}' \
-            -X POST "$API_URL/api/v1/projects/$PROJECT_ID/artifacts" \
-            -H "Authorization: Bearer $API_KEY" \
-            -H "X-Artifact-Sha: $SHA" \
-            -H "X-Artifact-Checksum: sha256:$CHECKSUM" \
-            -H "X-Artifact-Branch: $BRANCH" \
-            -H "X-Artifact-Author: $AUTHOR" \
-            -H "X-Artifact-Duration: $DURATION" \
-            -H "X-Artifact-Run-Id: $RUN_ID" \
-            -H "Content-Type: application/gzip" \
-            -H "Content-Length: $SIZE" \
-            --data-binary @"$TARBALL")"
+          # Upload STRAIGHT to R2 via a presigned PUT, then hand the API the staged key.
+          # Posting the tarball through the API means posting it through Cloudflare, whose
+          # ~100 MB edge cap rejects the request before it reaches the backend — the runner
+          # gets an HTML "413 Payload Too Large" with a cloudflare footer, and nothing is
+          # logged server-side because nothing arrived. A static build clears 100 MB easily.
+          # (Same two-step the agent deploy lane already uses.)
+          UP="$(curl -sS -X POST "$API_URL/api/v1/projects/$PROJECT_ID/artifacts/upload-url" \
+            -H "Authorization: Bearer $API_KEY" -H "Content-Length: 0")"
+          UPLOAD_URL="$(printf '%s' "$UP" | jq -r '.uploadUrl // empty')"
+          UPLOAD_KEY="$(printf '%s' "$UP" | jq -r '.uploadKey // empty')"
+
+          if [ -n "$UPLOAD_URL" ] && [ -n "$UPLOAD_KEY" ]; then
+            PUT_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
+              -H "Content-Type: application/gzip" --upload-file "$TARBALL" "$UPLOAD_URL")"
+            if [ "$PUT_STATUS" != "200" ] && [ "$PUT_STATUS" != "201" ]; then
+              echo "::error::artifact upload to storage failed (HTTP $PUT_STATUS)"; exit 1
+            fi
+            STATUS="$(curl -sS -o "$RUNNER_TEMP/ingest-resp.json" -w '%{http_code}' \
+              -X POST "$API_URL/api/v1/projects/$PROJECT_ID/artifacts/from-upload" \
+              -H "Authorization: Bearer $API_KEY" \
+              -H "X-Artifact-Sha: $SHA" \
+              -H "X-Artifact-Checksum: sha256:$CHECKSUM" \
+              -H "X-Artifact-Branch: $BRANCH" \
+              -H "X-Artifact-Author: $AUTHOR" \
+              -H "X-Artifact-Duration: $DURATION" \
+              -H "X-Artifact-Run-Id: $RUN_ID" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -nc --arg k "$UPLOAD_KEY" '{uploadKey:$k}')")"
+          else
+            # An older backend has no /upload-url. Fall back to the raw body so a repo on
+            # the current workflow keeps deploying against an API that predates this.
+            echo "staged upload unavailable — posting the artifact directly"
+            STATUS="$(curl -sS -o "$RUNNER_TEMP/ingest-resp.json" -w '%{http_code}' \
+              -X POST "$API_URL/api/v1/projects/$PROJECT_ID/artifacts" \
+              -H "Authorization: Bearer $API_KEY" \
+              -H "X-Artifact-Sha: $SHA" \
+              -H "X-Artifact-Checksum: sha256:$CHECKSUM" \
+              -H "X-Artifact-Branch: $BRANCH" \
+              -H "X-Artifact-Author: $AUTHOR" \
+              -H "X-Artifact-Duration: $DURATION" \
+              -H "X-Artifact-Run-Id: $RUN_ID" \
+              -H "Content-Type: application/gzip" \
+              -H "Content-Length: $SIZE" \
+              --data-binary @"$TARBALL")"
+          fi
           echo "ingest HTTP $STATUS:"; cat "$RUNNER_TEMP/ingest-resp.json"; echo
           if [ "$STATUS" != "202" ]; then
             echo "::error::artifact ingest failed (HTTP $STATUS)"; exit 1
