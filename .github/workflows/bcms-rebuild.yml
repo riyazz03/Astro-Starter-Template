@@ -1,5 +1,8 @@
 # Rebuilds + republishes this static site when BetterCMS content is published
 # (repository_dispatch: bcms-rebuild) and on push to main.
+#
+# Build settings come from BCMS_* repository variables (set from the BetterCMS
+# Hosting page), never from this file — so changing them does not touch your repo.
 name: BetterCMS Rebuild
 
 on:
@@ -8,8 +11,19 @@ on:
   push:
     branches: [main]
 
+# Read-only: this workflow only ever checks out the repo and uploads a build
+# artifact to BetterCMS. It must never be able to write back to the repository —
+# the build command is operator-configurable from the BetterCMS dashboard, and a
+# workspace admin there is not necessarily a collaborator here.
+permissions:
+  contents: read
+
 jobs:
   build-and-publish:
+    # "Auto deploy on push" (BCMS_AUTO_DEPLOY repo variable). Off ⇒ a git push no
+    # longer deploys, but a CMS publish (repository_dispatch) still rebuilds. That
+    # is exactly what the toggle promises on the Hosting page.
+    if: github.event_name != 'push' || vars.BCMS_AUTO_DEPLOY != 'false'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (push → its commit; content rebuild → main HEAD)
@@ -20,12 +34,16 @@ jobs:
           # not a git ref, so pinning checkout to it 404s the fetch.
           ref: ${{ github.event_name == 'push' && github.sha || 'main' }}
 
+      - name: Start build timer
+        run: echo "BCMS_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          # Current LTS. Modern frameworks (Astro 6, Vite 8) require Node >=22.12,
-          # and 22 stays backward-compatible with older projects.
-          node-version: "22"
+          # Node version is a per-project setting (BCMS_NODE_VERSION). Unset ⇒ 22:
+          # current LTS, and modern frameworks (Astro 6, Vite 8) require >=22.12
+          # while 22 stays backward-compatible with older projects.
+          node-version: ${{ vars.BCMS_NODE_VERSION || '22' }}
           # No 'cache:' here — it would hard-require a package-lock.json/yarn.lock and
           # fail any bun/pnpm project. Each package manager handles its own caching.
 
@@ -39,41 +57,169 @@ jobs:
           WORKSPACE: ${{ vars.BCMS_WORKSPACE_SLUG }}
           ENVIRONMENT: production
           CONTENT_OUT: bcms-content.json
+          ROOT_DIR: ${{ vars.BCMS_ROOT_DIR }}
         run: |
+          exec > >(tee -a "$RUNNER_TEMP/bcms-build.log") 2>&1
+          # CONTENT_OUT is relative, and the build runs in ROOT_DIR — so the content
+          # file has to be written there too, or a content-consuming build won't find it.
+          if [ -n "${ROOT_DIR:-}" ] && [ "${ROOT_DIR}" != "/" ] && [ "${ROOT_DIR}" != "." ]; then
+            cd "$ROOT_DIR" || { echo "::error::configured root directory '$ROOT_DIR' not found"; exit 1; }
+          fi
           curl -fsSL "$API_URL/action/fetch-content.mjs" -o "$RUNNER_TEMP/fetch-content.mjs"
           node "$RUNNER_TEMP/fetch-content.mjs"
 
-      - name: Install & build
+      - name: Export project environment variables
+        env:
+          # The project's own env vars (FLO-983) are written to this repo as encrypted
+          # repository SECRETS by syncProjectEnvVars. GitHub hands a secret to a step only
+          # if that step names it in `env:` — and this template is a pure function of the
+          # branch, so it cannot know per-project key names. `toJSON(secrets)` is the only
+          # channel that carries them without templating user input into YAML.
+          #
+          # Its own step on purpose: values written to $GITHUB_ENV apply to SUBSEQUENT
+          # steps, never the one doing the writing. Folded into "Install & build" this
+          # would run, succeed, and silently export nothing that build could see.
+          SECRETS_CONTEXT: ${{ toJSON(secrets) }}
         run: |
-          # A repo with no package.json — or no "build" script — is a plain static
-          # site: skip install/build and publish the files as-is (Vercel "Other"
-          # preset). Otherwise detect the package manager from the committed lockfile
-          # so bun, pnpm, yarn and npm projects all build (no assumption of a lockfile).
+          node -e '
+            var fs = require("fs");
+            var secrets = JSON.parse(process.env.SECRETS_CONTEXT || "{}");
+            // BCMS_* are platform-internal (the delivery API key above all); GITHUB_TOKEN
+            // and ACTIONS_* belong to the runner. syncProjectEnvVars already refuses to
+            // WRITE a BCMS_ key, so this is the symmetric guard on the read side.
+            var skip = function (k) { return /^BCMS_/i.test(k) || /^(github_token|ACTIONS_)/i.test(k); };
+            var DELIM = "BCMS_ENV_EOF";
+            var out = [];
+            Object.keys(secrets).forEach(function (key) {
+              var value = secrets[key];
+              if (skip(key) || typeof value !== "string") return;
+              // A value containing the heredoc terminator could close it early and turn
+              // the remainder into forged entries. Drop it loudly rather than write a
+              // $GITHUB_ENV file that means something other than what was configured.
+              if (value.indexOf(DELIM) !== -1) {
+                console.log("::warning::skipped " + key + " - value contains the reserved delimiter");
+                return;
+              }
+              out.push(key + "<<" + DELIM + "\n" + value + "\n" + DELIM);
+              console.log("exported " + key);
+            });
+            if (out.length) fs.appendFileSync(process.env.GITHUB_ENV, out.join("\n") + "\n");
+            console.log("project environment variables exported: " + out.length);
+          '
+
+      - name: Install & build
+        env:
+          # Per-project overrides. Passed as env, never inlined into the script body.
+          # Empty ⇒ the lockfile auto-detection below runs exactly as it always has.
+          ROOT_DIR: ${{ vars.BCMS_ROOT_DIR }}
+          INSTALL_CMD: ${{ vars.BCMS_INSTALL_COMMAND }}
+          # Empty => lockfile detection runs unchanged. CHECK-constrained at the DB and
+          # enum-validated at the API, because it is expanded into the shell below.
+          PKG_MANAGER: ${{ vars.BCMS_PKG_MANAGER }}
+          BUILD_CMD: ${{ vars.BCMS_BUILD_COMMAND }}
+          # ── SDK configuration ───────────────────────────────────────────────────
+          # @bettercms-ai/astro reads these in its astro:config:setup hook and THROWS
+          # without them. The fetch step above already receives the same workspace slug;
+          # the build did not, so every repo that called `bettercms({})` — the form the
+          # README documents — died before rendering a single page. The Next/React SDKs
+          # read the same names.
+          #
+          # PUBLIC_-prefixed because that is Vite's (and therefore Astro's) default
+          # envPrefix: these three reach `import.meta.env.PUBLIC_BCMS_*` in client code.
+          # All three are already public — the workspace slug and project id appear in
+          # every delivery URL the browser calls. The API KEY is deliberately absent.
+          PUBLIC_BCMS_API_URL: https://api.bettercms.ai
+          PUBLIC_BCMS_WORKSPACE: ${{ vars.BCMS_WORKSPACE_SLUG }}
+          PUBLIC_BCMS_PROJECT_ID: ${{ vars.BCMS_PROJECT_ID }}
+          # Absolute origin for canonical + og:url. Unset (a repo connected before this
+          # variable existed) ⇒ a site that omits those tags, exactly as before.
+          PUBLIC_SITE_URL: ${{ vars.BCMS_SITE_URL }}
+        run: |
+          # Mirror everything to a log file so the failure reporter below can send the
+          # tail back to BetterCMS. Without this a broken build is only visible here.
+          exec > >(tee -a "$RUNNER_TEMP/bcms-build.log") 2>&1
+          # Root directory (Vercel "Root Directory"): the sub-dir of a monorepo that
+          # holds the site. Empty ⇒ repo root. Validated server-side (no .., no
+          # absolute paths) before it is ever written as a variable.
+          if [ -n "${ROOT_DIR:-}" ] && [ "${ROOT_DIR}" != "/" ] && [ "${ROOT_DIR}" != "." ]; then
+            echo "root directory: $ROOT_DIR"
+            cd "$ROOT_DIR" || { echo "::error::configured root directory '$ROOT_DIR' not found"; exit 1; }
+          fi
           corepack enable || true
-          if [ ! -f package.json ]; then
-            echo "No package.json — treating the repo as a static site (no build step)."
-          elif ! node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
-            echo "No \"build\" script in package.json — treating the repo as a static site (no build step)."
-          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
-            echo "Detected Bun (bun.lock)"
-            bun install
-            bun run build
-          elif [ -f pnpm-lock.yaml ]; then
-            echo "Detected pnpm (pnpm-lock.yaml)"
-            pnpm install
-            pnpm run build
-          elif [ -f yarn.lock ]; then
-            echo "Detected Yarn (yarn.lock)"
-            yarn install
-            yarn build
-          elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            echo "Detected npm (lockfile)"
-            npm ci || npm install
-            npm run build
+
+          # Install and build are INDEPENDENT phases, each overridable on its own —
+          # Vercel semantics. Overriding only the install command (the common case,
+          # e.g. "npm install --legacy-peer-deps") must NOT stop the build from running.
+          # A repo with no package.json — or no "build" script — is a plain static site:
+          # skip both phases and publish the files as-is (Vercel "Other" preset).
+          PM=""
+          if [ -f package.json ]; then
+            # An explicit override wins over detection (FLO-977). Detection is a GUESS the
+            # moment a repo carries two lockfiles — an ordinary state right after migrating
+            # between managers — and the loser is a build that dies at install with no
+            # explanation. Empty ⇒ detect exactly as before, which is every project today.
+            if [ -n "$PKG_MANAGER" ]; then PM="$PKG_MANAGER"
+            elif [ -f bun.lock ] || [ -f bun.lockb ]; then PM="bun"
+            elif [ -f pnpm-lock.yaml ]; then PM="pnpm"
+            elif [ -f yarn.lock ]; then PM="yarn"
+            elif [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then PM="npm"
+            else PM="npm-nolock"
+            fi
+          fi
+          HAS_BUILD_SCRIPT=0
+          if [ -f package.json ] && node -e "process.exit((require('./package.json').scripts||{}).build?0:1)" 2>/dev/null; then
+            HAS_BUILD_SCRIPT=1
+          fi
+
+          # Fail here, not 100 lines later. A repo with no build script AND no HTML anywhere
+          # cannot produce a site: install is skipped, build is skipped, and the packaging
+          # step below dies with "no static HTML found" — which reads as a broken static
+          # export and sends people to fix a next.config that was never the problem. The
+          # actual situation is that the repository is empty, and that deserves its own
+          # sentence. (An explicit BUILD_CMD means the user knows better; let them run it.)
+          if [ "$HAS_BUILD_SCRIPT" = "0" ] && [ -z "${BUILD_CMD:-}" ] \
+             && [ -z "$(find . -path ./node_modules -prune -o -name '*.html' -print -quit 2>/dev/null)" ]; then
+            echo "::error::this repository has no website in it — no \"build\" script in package.json (or no package.json at all) and no HTML files. Push your site's source, or create this project's repository from a starter template on the Hosting page."
+            exit 1
+          fi
+          # Nothing to install or build unless a build actually happens: either the repo
+          # declares a build script, or an explicit build command was configured.
+          WILL_BUILD=0
+          if [ "$HAS_BUILD_SCRIPT" = "1" ] || [ -n "${BUILD_CMD:-}" ]; then WILL_BUILD=1; fi
+
+          # ── Install ──
+          # An explicit command is a shell command by definition — that IS the setting —
+          # which is why this workflow pins `permissions: contents: read` above.
+          if [ -n "${INSTALL_CMD:-}" ]; then
+            echo "install command: $INSTALL_CMD"
+            sh -c "$INSTALL_CMD"
+          elif [ -z "$PM" ]; then
+            echo "No package.json — treating the repo as a static site (no install step)."
+          elif [ "$WILL_BUILD" = "0" ]; then
+            echo "No \"build\" script in package.json — treating the repo as a static site (no install step)."
           else
-            echo "No lockfile detected — falling back to npm install"
-            npm install
-            npm run build
+            case "$PM" in
+              bun)        echo "Detected Bun (bun.lock)";           bun install ;;
+              pnpm)       echo "Detected pnpm (pnpm-lock.yaml)";    pnpm install ;;
+              yarn)       echo "Detected Yarn (yarn.lock)";         yarn install ;;
+              npm)        echo "Detected npm (lockfile)";           npm ci || npm install ;;
+              npm-nolock) echo "No lockfile detected — falling back to npm install"; npm install ;;
+            esac
+          fi
+
+          # ── Build ──
+          if [ -n "${BUILD_CMD:-}" ]; then
+            echo "build command: $BUILD_CMD"
+            sh -c "$BUILD_CMD"
+          elif [ -z "$PM" ] || [ "$WILL_BUILD" = "0" ]; then
+            echo "Nothing to build — publishing the repo's static files as-is."
+          else
+            case "$PM" in
+              bun)  bun run build ;;
+              pnpm) pnpm run build ;;
+              yarn) yarn build ;;
+              *)    npm run build ;;
+            esac
           fi
 
       - name: Package, checksum & upload artifact
@@ -84,8 +230,18 @@ jobs:
           # Optional escape hatch (Vercel "Output Directory" setting). Set the
           # BCMS_BUILD_DIR repo variable to force a dir; unset → auto-detect below.
           BUILD_DIR_OVERRIDE: ${{ vars.BCMS_BUILD_DIR }}
+          ROOT_DIR: ${{ vars.BCMS_ROOT_DIR }}
+          # Provenance for the BetterCMS deploy history. RUN_ID is the only real
+          # build log we have — the platform links back to this Actions run.
+          BRANCH: main
+          AUTHOR: ${{ github.actor }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
+          exec > >(tee -a "$RUNNER_TEMP/bcms-build.log") 2>&1
+          if [ -n "${ROOT_DIR:-}" ] && [ "${ROOT_DIR}" != "/" ] && [ "${ROOT_DIR}" != "." ]; then
+            cd "$ROOT_DIR"
+          fi
           # Label the artifact with the commit we actually built, so the platform
           # always records a real git SHA — a content rebuild's dispatched marker
           # isn't a commit. This self-heals what the next rebuild can reference.
@@ -132,12 +288,17 @@ jobs:
           tar --exclude=./.git --exclude=./.github --exclude=./node_modules --exclude=./bcms-content.json -czf "$TARBALL" -C "$BUILD_DIR" .
           CHECKSUM="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
           SIZE="$(stat -c%s "$TARBALL")"
-          echo "artifact: $SIZE bytes, sha256:$CHECKSUM"
+          DURATION="$(( $(date +%s) - ${BCMS_STARTED_AT:-$(date +%s)} ))"
+          echo "artifact: $SIZE bytes, sha256:$CHECKSUM, built in ${DURATION}s"
           STATUS="$(curl -sS -o "$RUNNER_TEMP/ingest-resp.json" -w '%{http_code}' \
             -X POST "$API_URL/api/v1/projects/$PROJECT_ID/artifacts" \
             -H "Authorization: Bearer $API_KEY" \
             -H "X-Artifact-Sha: $SHA" \
             -H "X-Artifact-Checksum: sha256:$CHECKSUM" \
+            -H "X-Artifact-Branch: $BRANCH" \
+            -H "X-Artifact-Author: $AUTHOR" \
+            -H "X-Artifact-Duration: $DURATION" \
+            -H "X-Artifact-Run-Id: $RUN_ID" \
             -H "Content-Type: application/gzip" \
             -H "Content-Length: $SIZE" \
             --data-binary @"$TARBALL")"
@@ -145,3 +306,32 @@ jobs:
           if [ "$STATUS" != "202" ]; then
             echo "::error::artifact ingest failed (HTTP $STATUS)"; exit 1
           fi
+
+      # Closes the feedback loop: without this a failed build is invisible to BetterCMS,
+      # which can only wait ~10 min, re-dispatch the same doomed build, and eventually say
+      # "check your GitHub Action". Now the deploy timeline shows the real error in seconds.
+      - name: Report build failure to BetterCMS
+        if: failure()
+        env:
+          API_URL: https://api.bettercms.ai
+          API_KEY: ${{ secrets.BCMS_API_KEY }}
+          PROJECT_ID: ${{ vars.BCMS_PROJECT_ID }}
+          BRANCH: main
+          AUTHOR: ${{ github.actor }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Best-effort by construction: this step must never mask the real failure, so
+          # every command tolerates absence and the upload itself ends in "|| true".
+          SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
+          DURATION="$(( $(date +%s) - ${BCMS_STARTED_AT:-$(date +%s)} ))"
+          # jq (preinstalled on ubuntu-latest) does the JSON escaping — a build log is
+          # arbitrary text and must never be hand-quoted into a payload.
+          tail -c 16000 "$RUNNER_TEMP/bcms-build.log" 2>/dev/null \
+            | jq -Rs --arg sha "$SHA" --arg runId "$RUN_ID" --arg branch "$BRANCH" \
+                     --arg author "$AUTHOR" --argjson duration "$DURATION" \
+                 '{sha:$sha, runId:$runId, branch:$branch, author:$author, durationSec:$duration, log:.}' \
+            > "$RUNNER_TEMP/bcms-failure.json"
+          curl -sS -o /dev/null -X POST "$API_URL/api/v1/projects/$PROJECT_ID/build-status" \
+            -H "Authorization: Bearer $API_KEY" \
+            -H "Content-Type: application/json" \
+            --data-binary @"$RUNNER_TEMP/bcms-failure.json" || true
